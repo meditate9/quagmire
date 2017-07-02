@@ -150,6 +150,7 @@ def create_DMPlex_from_points(x, y, bmask=None, refinement_steps=0):
     pStart, eEnd = dm.getDepthStratum(0) # points in DAG
 
     # Label boundary points and edges
+    dm.createLabel("trimesh")
     dm.createLabel("boundary")
 
     if PETSc.COMM_WORLD.rank == 0:
@@ -185,7 +186,131 @@ def create_DMPlex_from_points(x, y, bmask=None, refinement_steps=0):
     origVec = dm.createGlobalVector()
 
     if PETSc.COMM_WORLD.size > 1:
-        sf = dm.distribute(overlap=1)
+        sf = dm.distribute(overlap=2)
+        newSect, newVec = dm.distributeField(sf, origSect, origVec)
+        dm.setDefaultSection(newSect)
+
+    # Label coarse DM in case it is ever needed again
+    pStart, pEnd = dm.getDepthStratum(0)
+    dm.createLabel("coarse")
+    for pt in range(pStart, pEnd):
+        dm.setLabelValue("coarse", pt, 1)
+
+    # Refinement
+    dm = refine_DM(dm, refinement_steps)
+
+    return dm
+
+
+def create_spherical_DMPlex_from_points(lons, lats, bmask=None, refinement_steps=0):
+    """
+    Triangulates x,y coordinates on rank 0 and creates a PETSc DMPlex object
+    from the cells and vertices to distribute among processors.
+
+    Parameters
+    ----------
+     x : array of floats, shape (n,)
+        x coordinates
+     y : array of floats, shape (n,)
+        y coordinates
+     bmask : array of bools, shape (n,)
+        boundary mask where points along the boundary
+        equal False, and the interior equal True
+        if bmask=None (default) then the convex hull of points is used
+     refinement_steps : int
+        number of iterations to refine the mesh (default: 0)
+
+    Returns
+    -------
+     DM : object
+        PETSc DMPlex object
+
+    Notes
+    -----
+     x and y are shuffled on input to aid triangulation efficiency
+
+     Refinement adds the midpoints of every line segment to the DM.
+     Boundary markers are automatically updated with each iteration.
+
+    """
+    from petsc4py import PETSc
+    from stripy import sTriangulation
+
+    def points_to_edges(tri, boundary):
+        """
+        Finds the edges connecting any combination of points in boundary
+        """
+        i1 = np.sort([tri.simplices[:,0], tri.simplices[:,1]], axis=0)
+        i2 = np.sort([tri.simplices[:,0], tri.simplices[:,2]], axis=0)
+        i3 = np.sort([tri.simplices[:,1], tri.simplices[:,2]], axis=0)
+
+        a = np.hstack([i1, i2, i3]).T
+
+        # find unique rows in numpy array
+        # <http://stackoverflow.com/questions/16970982/find-unique-rows-in-numpy-array>
+        b = np.ascontiguousarray(a).view(np.dtype((np.void, a.dtype.itemsize * a.shape[1])))
+        edges = np.unique(b).view(a.dtype).reshape(-1, a.shape[1])
+
+        ix = np.in1d(edges.ravel(), boundary).reshape(edges.shape)
+        boundary2 = ix.sum(axis=1)
+        # both points are boundary points that share the line segment
+        boundary_edges = edges[boundary2==2]
+        return boundary_edges
+
+
+    if PETSc.COMM_WORLD.rank == 0 or PETSc.COMM_WORLD.size == 1:
+        reshuffle = np.random.permutation(lons.size)
+        lons = lons[reshuffle]
+        lats = lats[reshuffle]
+        if bmask is not None:
+            bmask = bmask[reshuffle]
+        tri = sTriangulation(lons,lats)
+        coords = tri.points
+        cells  = tri.simplices
+    else:
+        coords = np.zeros((0,3), dtype=float)
+        cells  = np.zeros((0,3), dtype=PETSc.IntType)
+
+    dim = 2
+    dm = PETSc.DMPlex().createFromCellList(dim, cells, coords)
+
+    origSect = dm.createSection(1, [1,0,0]) # define one DoF on the nodes
+    origSect.setFieldName(0, "points")
+    origSect.setUp()
+    dm.setDefaultSection(origSect)
+
+    pStart, eEnd = dm.getDepthStratum(0) # points in DAG
+
+    # Label boundary points and edges
+    dm.createLabel("strimesh")
+
+    if bmask is not None:
+        dm.createLabel("boundary")
+        if PETSc.COMM_WORLD.rank == 0:
+            boundary_indices = np.nonzero(~bmask)[0]
+
+            # mark edges
+            boundary_edges = points_to_edges(tri, boundary_indices)
+
+            # convert to DAG ordering
+            boundary_edges += pStart
+            boundary_indices += pStart
+
+            # join is the common edge to which they are connected
+            for idx, e in enumerate(boundary_edges):
+                join = dm.getJoin(e)
+                dm.setLabelValue("boundary", join[0], 1)
+
+            # mark points
+            for ind in boundary_indices:
+                dm.setLabelValue("boundary", ind, 1)
+
+
+    # Distribute to other processors
+    origVec = dm.createGlobalVector()
+
+    if PETSc.COMM_WORLD.size > 1:
+        sf = dm.distribute(overlap=2)
         newSect, newVec = dm.distributeField(sf, origSect, origVec)
         dm.setDefaultSection(newSect)
 
@@ -249,7 +374,7 @@ def create_DMPlex_from_box(minX, maxX, minY, maxY, resX, resY, refinement=None):
     if refinement:
         dm.setRefinementLimit(refinement) # Maximum cell volume
         dm = dm.refine()
-    dm.markBoundaryFaces('BC')
+    dm.markBoundaryFaces('boundary')
 
     pStart, pEnd = dm.getChart()
 
@@ -261,7 +386,7 @@ def create_DMPlex_from_box(minX, maxX, minY, maxY, resX, resY, refinement=None):
     origVec = dm.createGlobalVec()
 
     if PETSc.COMM_WORLD.size > 1:
-        sf = dm.distribute(overlap=1)
+        sf = dm.distribute(overlap=2)
         newSect, newVec = dm.distributeField(sf, origSect, origVec)
         dm.setDefaultSection(newSect)
 
@@ -276,15 +401,13 @@ def create_DMDA(minX, maxX, minY, maxY, resX, resY):
     """
     from petsc4py import PETSc
 
-    dx = (maxX - minX)/resX
-    dy = (maxY - minY)/resY
-
-    if dx != dy:
-        raise ValueError("Spacing must be uniform in x and y directions [{:.4f}, {:.4f}]".format(dx,dy))
+    nx = (maxX - minX)/resX
+    ny = (maxY - minY)/resY
 
     dim = 2
-    dm = PETSc.DMDA().create(dim, sizes=(resX, resY), stencil_width=1)
+    dm = PETSc.DMDA().create(dim, sizes=(nx, ny), stencil_width=1)
     dm.setUniformCoordinates(minX, maxX, minY, maxY)
+    dm.createLabel("pixmesh")
     return dm
 
 
@@ -319,6 +442,14 @@ def refine_DM(dm, refinement_steps):
     origSect.setFieldName(0, "points")
     origSect.setUp()
     dm.setDefaultSection(origSect)
+
+    labels = []
+    for i in range(dm.getNumLabels()):
+        labels.append(dm.getLabelName(i))
+
+    if 'strimesh' in labels:
+        pass
+        # need to make sure new points are always on the unit sphere
 
     dm.stratify()
     return dm

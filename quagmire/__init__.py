@@ -16,14 +16,16 @@ along with Quagmire.  If not, see <http://www.gnu.org/licenses/>.
 
 from .mesh import PixMesh as _PixMesh
 from .mesh import TriMesh as _TriMesh
+from .mesh import sTriMesh as _sTriMesh
 from petsc4py import PETSc as _PETSc
 from .topomesh import TopoMesh as _TopoMeshClass
 from .surfmesh import SurfMesh as _SurfaceProcessMeshClass
 
 import tools
 
-known_basemesh_classes = {type(_PETSc.DMDA())   : _PixMesh,\
-                          type(_PETSc.DMPlex()) : _TriMesh}
+known_basemesh_classes = {"pixmesh" : _PixMesh,\
+                          "trimesh" : _TriMesh,\
+                          "strimesh": _sTriMesh}
 
 
 def FlatMesh(DM, *args, **kwargs):
@@ -46,8 +48,12 @@ def FlatMesh(DM, *args, **kwargs):
     -------
      FlatMesh : object
     """
-    BaseMeshType = type(DM)
-    if BaseMeshType in known_basemesh_classes.keys():
+    for i in range(DM.getNumLabels()):
+        BaseMeshType = DM.getLabelName(i)
+        if BaseMeshType in known_basemesh_classes:
+            break
+
+    if BaseMeshType in known_basemesh_classes:
 
         class FlatMeshClass(known_basemesh_classes[BaseMeshType]):
             def __init__(self, dm, *args, **kwargs):
@@ -57,8 +63,8 @@ def FlatMesh(DM, *args, **kwargs):
         return FlatMeshClass(DM, *args, **kwargs)
 
     else:
-      raise TypeError("Mesh type {:s} unknown\n\
-        Known mesh types: {}".format(BaseMeshType, known_basemesh_classes.keys()))
+      raise TypeError("Mesh type unknown\n\
+        Known mesh types: {}".format(known_basemesh_classes.keys()))
 
     return
 
@@ -85,8 +91,12 @@ def TopoMesh(DM, *args, **kwargs):
     -------
      TopoMesh : object
     """
-    BaseMeshType = type(DM)
-    if BaseMeshType in known_basemesh_classes.keys():
+    for i in range(DM.getNumLabels()):
+        BaseMeshType = DM.getLabelName(i)
+        if BaseMeshType in known_basemesh_classes:
+            break
+
+    if BaseMeshType in known_basemesh_classes:
         class TopoMeshClass(known_basemesh_classes[BaseMeshType], _TopoMeshClass):
             def __init__(self, dm, *args, **kwargs):
                 known_basemesh_classes[BaseMeshType].__init__(self, dm, *args, **kwargs)
@@ -96,8 +106,8 @@ def TopoMesh(DM, *args, **kwargs):
         return TopoMeshClass(DM, *args, **kwargs)
 
     else:
-      raise TypeError("Mesh type {:s} unknown\n\
-        Known mesh types: {}".format(BaseMeshType, known_basemesh_classes.keys()))
+      raise TypeError("Mesh type unknown\n\
+        Known mesh types: {}".format(known_basemesh_classes.keys()))
 
     return
 
@@ -125,8 +135,12 @@ def SurfaceProcessMesh(DM, *args, **kwargs):
     -------
      SurfaceProcessMesh : object
     """
-    BaseMeshType = type(DM)
-    if BaseMeshType in known_basemesh_classes.keys():
+    for i in range(DM.getNumLabels()):
+        BaseMeshType = DM.getLabelName(i)
+        if BaseMeshType in known_basemesh_classes:
+            break
+
+    if BaseMeshType in known_basemesh_classes:
         class SurfaceProcessMeshClass(known_basemesh_classes[BaseMeshType], _TopoMeshClass, _SurfaceProcessMeshClass):
             def __init__(self, dm, *args, **kwargs):
                 known_basemesh_classes[BaseMeshType].__init__(self, dm, *args, **kwargs)
@@ -137,7 +151,7 @@ def SurfaceProcessMesh(DM, *args, **kwargs):
         return SurfaceProcessMeshClass(DM, *args, **kwargs)
 
     else:
-      raise TypeError("Mesh type {:s} unknown\n\
-        Known mesh types: {}".format(BaseMeshType, known_basemesh_classes.keys()))
+      raise TypeError("Mesh type unknown\n\
+        Known mesh types: {}".format(known_basemesh_classes.keys()))
 
     return

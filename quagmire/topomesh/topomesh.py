@@ -204,9 +204,9 @@ class TopoMesh(object):
         # Process weights
         for i in range(0, self.downhill_neighbours):
             down_N = self.down_neighbour[i+1]
+            node_range, dneighL = np.where(self.neighbour_cloud == down_N.reshape(-1,1))
             grad = np.abs(self.height - self.height[down_N]+1.0e-10) / (1.0e-10 + \
-                   np.hypot(self.coords[:,0] - self.coords[down_N,0],
-                            self.coords[:,1] - self.coords[down_N,1] ))
+                   self.neighbour_cloud_distances[node_range,dneighL[node_range]])
 
             weights[i,:] = np.sqrt(grad)
 
